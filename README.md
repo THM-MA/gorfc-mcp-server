@@ -11,8 +11,9 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that c
 ## Build
 
 ```bash
-make build    # compiles to ./gorfc-mcp-server
-make clean    # removes binary
+make build           # compiles to ./gorfc-mcp-server
+make build-windows   # cross-compiles to ./gorfc-mcp-server.exe (Windows x86_64)
+make clean           # removes built binaries
 ```
 
 The build uses CGO with flags pointing to the SAP NW RFC SDK:
@@ -21,6 +22,16 @@ The build uses CGO with flags pointing to the SAP NW RFC SDK:
 CGO_CFLAGS="-I/usr/local/sap/nwrfcsdk/include"
 CGO_LDFLAGS="-L/usr/local/sap/nwrfcsdk/lib"
 ```
+
+### Cross-compiling for Windows
+
+The `build-windows` target cross-compiles for Windows x86_64 using MinGW. It requires:
+
+- **MinGW-w64 cross-compiler** (`x86_64-w64-mingw32-gcc`). Install on Debian/Ubuntu:
+  ```bash
+  sudo apt install gcc-mingw-w64-x86-64
+  ```
+- **Windows build of the SAP NW RFC SDK** with headers and libraries available at the configured SDK path
 
 ## Configuration
 
