@@ -24,7 +24,9 @@ There are no tests yet. The project has no lint or vet targets configured.
 
 ## Running
 
-The server reads SAP connection destinations from `sapnwrfc.ini` (standard SAP NW RFC SDK config file) in the working directory. Pass the destination name via `SAP_DEST` env var or as the first CLI argument:
+Two connection modes are supported.
+
+**Mode 1 — ini-based (`SAP_DEST`):** reads the destination from `sapnwrfc.ini` in the working directory.
 
 ```bash
 SAP_DEST=SID ./gorfc-mcp-server
@@ -32,11 +34,27 @@ SAP_DEST=SID ./gorfc-mcp-server
 ./gorfc-mcp-server SID
 ```
 
+**Mode 2 — direct env vars:** supply connection parameters without an ini file.
+
+```bash
+# Direct application-server connection
+SAP_ASHOST=sap.example.com SAP_SYSNR=00 \
+  SAP_CLIENT=100 SAP_USER=rfcuser SAP_PASSWD=secret \
+  ./gorfc-mcp-server
+
+# Load-balancing / message-server connection
+SAP_MSHOST=msg.example.com SAP_SYSID=SID SAP_GROUP=PUBLIC \
+  SAP_CLIENT=100 SAP_USER=rfcuser SAP_PASSWD=secret \
+  ./gorfc-mcp-server
+```
+
+Supported env vars for direct mode: `SAP_ASHOST`, `SAP_SYSNR`, `SAP_MSHOST`, `SAP_MSSERV`, `SAP_SYSID`, `SAP_GROUP`, `SAP_CLIENT` (required), `SAP_USER` (required), `SAP_PASSWD` (required), `SAP_LANG`.
+
 Logs go to stderr with `[gorfc-mcp]` prefix.
 
 ## MCP Client Configuration
 
-**Claude Desktop** (`claude_desktop_config.json`):
+**Claude Desktop — ini-based** (`claude_desktop_config.json`):
 ```json
 {
   "mcpServers": {
@@ -49,13 +67,33 @@ Logs go to stderr with `[gorfc-mcp]` prefix.
 }
 ```
 
+**Claude Desktop — direct env vars:**
+```json
+{
+  "mcpServers": {
+    "sap": {
+      "command": "/path/to/gorfc-mcp-server",
+      "env": {
+        "LD_LIBRARY_PATH": "/usr/local/sap/nwrfcsdk/lib",
+        "SAP_ASHOST": "sap.example.com",
+        "SAP_SYSNR": "00",
+        "SAP_CLIENT": "100",
+        "SAP_USER": "rfcuser",
+        "SAP_PASSWD": "secret"
+      }
+    }
+  }
+}
+```
+
 **Claude Code CLI**: `claude mcp add sap /path/to/gorfc-mcp-server -- SID`
 
 ## Architecture
 
 Everything lives in `cmd/gorfc-mcp-server/main.go`. Key components:
 
-- **connManager**: Thread-safe wrapper around `gorfc.Connection`. All RFC calls are serialized through its mutex since the SAP NW RFC SDK is not thread-safe per connection handle. Includes auto-reconnect with exponential backoff (3 retries, starting at 100ms).
+- **connManager**: Thread-safe wrapper around `gorfc.Connection`. Stores a `gorfc.ConnectionParameters` map and always connects via `gorfc.ConnectionFromParams`. Constructed with `newConnManager(dest)` (ini-based, sets `{"dest": dest}`) or `newConnManagerFromParams(params)` (direct params). Includes auto-reconnect with exponential backoff (3 retries, starting at 100ms).
+- **connParamsFromEnv**: Reads `SAP_ASHOST` / `SAP_MSHOST` and related env vars (`SAP_SYSNR`, `SAP_CLIENT`, `SAP_USER`, `SAP_PASSWD`, `SAP_LANG`, `SAP_MSSERV`, `SAP_SYSID`, `SAP_GROUP`) and returns a `gorfc.ConnectionParameters` map. Returns `nil, nil` when neither `SAP_ASHOST` nor `SAP_MSHOST` is set so the caller falls back to `SAP_DEST`.
 - **coerceParams / coerceValue**: Type coercion layer converting JSON-deserialized Go types (`float64`, `string`, etc.) to the specific Go types `gorfc` expects (e.g., `int32` for `RFCTYPE_INT`, `time.Time` for dates/times, `[]byte` for byte fields via base64). Recursively handles structures and tables.
 - **validateParameters**: Pre-call check that all parameter names exist in the function description (after uppercasing).
 - **metrics**: In-memory call counter tracking total/success/failure counts, durations, and per-function stats.

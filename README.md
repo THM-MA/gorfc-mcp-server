@@ -6,7 +6,7 @@ A [Model Context Protocol](https://modelcontextprotocol.io/) (MCP) server that c
 
 - **Go 1.24+**
 - **SAP NW RFC SDK** installed at `/usr/local/sap/nwrfcsdk/` (headers in `include/`, libraries in `lib/`)
-- A valid `sapnwrfc.ini` configuration file in the working directory with SAP connection destinations
+- A SAP connection configured either via a `sapnwrfc.ini` file **or** environment variables (see [Configuration](#configuration))
 
 ### SAP NetWeaver RFC SDK Proprietary Notice
 The **SAP NetWeaver RFC SDK** is proprietary software owned by SAP SE. It is **not open-source** and is subject to specific licensing terms.
@@ -48,7 +48,11 @@ Install on Debian/Ubuntu:
 
 ## Configuration
 
-The server reads SAP connection destinations from a `sapnwrfc.ini` file (standard SAP NW RFC SDK config format) in the working directory. Example:
+Two connection modes are supported.
+
+### Mode 1 — ini-based (SAP_DEST)
+
+Create a `sapnwrfc.ini` file (standard SAP NW RFC SDK format) in the working directory and reference the destination by name:
 
 ```ini
 DEST=SID
@@ -63,18 +67,46 @@ LANG=EN
 
 > **Note:** `sapnwrfc.ini` contains plaintext credentials and is gitignored. Never commit this file.
 
+### Mode 2 — direct environment variables
+
+Skip the ini file and supply connection parameters directly via environment variables.
+
+**Direct application-server connection:**
+
+| Variable | Required | Description |
+| :--- | :--- | :--- |
+| `SAP_ASHOST` | Yes | Application server hostname |
+| `SAP_SYSNR` | No | System number (default `00`) |
+| `SAP_CLIENT` | Yes | SAP client / mandant |
+| `SAP_USER` | Yes | Logon user |
+| `SAP_PASSWD` | Yes | Logon password |
+| `SAP_LANG` | No | Logon language (e.g. `EN`) |
+
+**Load-balancing / message-server connection:**
+
+| Variable | Required | Description |
+| :--- | :--- | :--- |
+| `SAP_MSHOST` | Yes | Message server hostname |
+| `SAP_MSSERV` | No | Message server service / port |
+| `SAP_SYSID` | No | SAP System ID |
+| `SAP_GROUP` | No | Logon group |
+| `SAP_CLIENT` | Yes | SAP client / mandant |
+| `SAP_USER` | Yes | Logon user |
+| `SAP_PASSWD` | Yes | Logon password |
+| `SAP_LANG` | No | Logon language |
+
 ## Running
 
-Pass the SAP destination name via the `SAP_DEST` environment variable or as the first CLI argument:
+### ini-based
+
+Pass the destination name via `SAP_DEST` or as the first CLI argument:
 
 ```bash
 SAP_DEST=SID ./gorfc-mcp-server
-```
-
-```bash
 ./gorfc-mcp-server SID
 ```
-The SID or System Id  is the unique, three-character alphanumeric identifier that serves as the "name" for a specific SAP system installation as described in your `sapnwrfc.ini` configuration file. For example:
+
+The SID is the unique, three-character alphanumeric identifier for the SAP system as defined in `sapnwrfc.ini`:
 
 | SID | Description |
 | :--- | :--- |
@@ -82,14 +114,38 @@ The SID or System Id  is the unique, three-character alphanumeric identifier tha
 | `QAS` | Quality Assurance and testing system |
 | `PRD` | Production (live) environment |
 
+### Direct environment variables
+
+```bash
+# Direct application-server connection
+SAP_ASHOST=sap.example.com SAP_SYSNR=00 \
+  SAP_CLIENT=100 SAP_USER=rfcuser SAP_PASSWD=secret \
+  ./gorfc-mcp-server
+
+# Load-balancing connection
+SAP_MSHOST=msg.example.com SAP_SYSID=SID SAP_GROUP=PUBLIC \
+  SAP_CLIENT=100 SAP_USER=rfcuser SAP_PASSWD=secret \
+  ./gorfc-mcp-server
+```
 
 Logs are written to stderr with a `[gorfc-mcp]` prefix.
+
+## Test
+```bash
+# ini-based
+SAP_DEST=SID go test -tags integration ./cmd/gorfc-mcp-server/
+
+# direct env vars
+SAP_ASHOST=sap.example.com SAP_SYSNR=00 SAP_CLIENT=100 \
+  SAP_USER=rfcuser SAP_PASSWD=secret \
+  go test -tags integration ./cmd/gorfc-mcp-server/
+```
 
 ## MCP Client Configuration
 
 ### Claude Desktop
 
-Add to your Claude Desktop config (`claude_desktop_config.json`):
+**ini-based:**
 
 ```json
 {
@@ -105,13 +161,36 @@ Add to your Claude Desktop config (`claude_desktop_config.json`):
 }
 ```
 
+**Direct environment variables:**
+
+```json
+{
+  "mcpServers": {
+    "sap": {
+      "command": "/path/to/gorfc-mcp-server",
+      "env": {
+        "LD_LIBRARY_PATH": "/usr/local/sap/nwrfcsdk/lib",
+        "SAP_ASHOST": "sap.example.com",
+        "SAP_SYSNR": "00",
+        "SAP_CLIENT": "100",
+        "SAP_USER": "rfcuser",
+        "SAP_PASSWD": "secret",
+        "SAP_LANG": "EN"
+      }
+    }
+  }
+}
+```
+
 ### Claude Code
 
-Add via the CLI:
+**ini-based:**
 
 ```bash
 claude mcp add sap /path/to/gorfc-mcp-server -- SID
 ```
+
+**Direct environment variables** (use `claude mcp add --env` flags or set them in your shell before launching):
 
 ## Tools
 Model Context Protocol (MCP) tools designed for SAP connectivity, metadata inspection, and table discovery via the NetWeaver RFC SDK.
@@ -221,10 +300,11 @@ Returns in-memory call statistics: total/successful/failed call counts, total an
 
 All logic lives in a single file: `cmd/gorfc-mcp-server/main.go`.
 
-- **connManager** -- Thread-safe wrapper around `gorfc.Connection`. All RFC calls are serialized through a mutex since the SAP NW RFC SDK is not thread-safe per connection handle. Includes auto-reconnect with exponential backoff (3 retries, starting at 100ms).
-- **coerceParams / coerceValue** -- Type coercion layer that converts JSON-deserialized Go types (`float64`, `string`, etc.) to the specific Go types `gorfc` expects. Recursively handles structures and tables.
-- **validateParameters** -- Pre-call validation that all parameter names exist in the function description.
-- **metrics** -- In-memory call counter tracking total/success/failure counts, durations, and per-function stats.
+- **connManager** — Thread-safe wrapper around `gorfc.Connection`. All RFC calls are serialized through a mutex since the SAP NW RFC SDK is not thread-safe per connection handle. Includes auto-reconnect with exponential backoff (3 retries, starting at 100ms). Constructed via `newConnManager(dest)` (ini-based) or `newConnManagerFromParams(params)` (direct parameters).
+- **connParamsFromEnv** — Reads `SAP_ASHOST`/`SAP_MSHOST` and related env vars and returns a `gorfc.ConnectionParameters` map. Returns `nil` when no direct-connection vars are set so the caller can fall back to `SAP_DEST`.
+- **coerceParams / coerceValue** — Type coercion layer that converts JSON-deserialized Go types (`float64`, `string`, etc.) to the specific Go types `gorfc` expects. Recursively handles structures and tables.
+- **validateParameters** — Pre-call validation that all parameter names exist in the function description.
+- **metrics** — In-memory call counter tracking total/success/failure counts, durations, and per-function stats.
 
 ## Example Prompts
 
